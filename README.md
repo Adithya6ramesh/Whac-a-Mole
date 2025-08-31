@@ -1,11 +1,27 @@
+# Whac-A-Mole Game
 
-  # Whac-A-Mole Game Interface
+A modern, interactive Whac-A-Mole game built with React, TypeScript, and Vite.
 
-  This is a code bundle for Whac-A-Mole Game Interface. The original project is available at https://www.figma.com/design/ongYZxqFA3QSAU6Setd4oA/Whac-A-Mole-Game-Interface.
+## Features
 
-  ## Running the code
+- Single player mode
+- Local multiplayer support
+- Modern UI with Radix UI components
+- Responsive design
+- Score tracking and timer
 
-  Run `npm i` to install the dependencies.
+## Development
 
-  Run `npm run dev` to start the development server.
+```bash
+npm install
+npm run dev
+```
+
+## Build
+
+```bash
+npm run build
+```
+
+<!-- Updated for Vercel deployment fix -->
   
