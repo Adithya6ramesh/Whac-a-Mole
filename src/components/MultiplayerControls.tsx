@@ -10,7 +10,7 @@ interface MultiplayerControlsProps {
 export function MultiplayerControls({ onMultiplayerStateChange }: MultiplayerControlsProps) {
   const [inviteCode, setInviteCode] = useState<string>('');
   const [joinCode, setJoinCode] = useState<string>('');
-  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'waiting' | 'connected' | 'error'>('idle');
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'waiting' | 'connected' | 'error' | 'disconnected'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [playerRole, setPlayerRole] = useState<'host' | 'guest' | null>(null);
   const [connectedPlayers, setConnectedPlayers] = useState<number>(1);
@@ -54,12 +54,30 @@ export function MultiplayerControls({ onMultiplayerStateChange }: MultiplayerCon
       onMultiplayerStateChange(false);
     };
 
+    const handleConnected = () => {
+      setConnectionStatus('idle');
+      setErrorMessage('');
+    };
+
+    const handleDisconnected = () => {
+      setConnectionStatus('disconnected');
+      setErrorMessage('Disconnected from server');
+    };
+
+    const handleConnectionError = (error: string) => {
+      setConnectionStatus('error');
+      setErrorMessage(`Connection error: ${error}`);
+    };
+
     // Register event listeners
     multiplayerService.on('sessionCreated', handleSessionCreated);
     multiplayerService.on('sessionJoined', handleSessionJoined);
     multiplayerService.on('playerConnected', handlePlayerConnected);
     multiplayerService.on('joinError', handleJoinError);
     multiplayerService.on('sessionLeft', handleSessionLeft);
+    multiplayerService.on('connected', handleConnected);
+    multiplayerService.on('disconnected', handleDisconnected);
+    multiplayerService.on('connectionError', handleConnectionError);
 
     return () => {
       multiplayerService.off('sessionCreated', handleSessionCreated);
@@ -67,25 +85,51 @@ export function MultiplayerControls({ onMultiplayerStateChange }: MultiplayerCon
       multiplayerService.off('playerConnected', handlePlayerConnected);
       multiplayerService.off('joinError', handleJoinError);
       multiplayerService.off('sessionLeft', handleSessionLeft);
+      multiplayerService.off('connected', handleConnected);
+      multiplayerService.off('disconnected', handleDisconnected);
+      multiplayerService.off('connectionError', handleConnectionError);
     };
   }, [onMultiplayerStateChange]);
 
   const handleCreateInvite = () => {
-    const code = multiplayerService.createGame();
-    setInviteCode(code);
+    // Ensure connection before creating game
+    multiplayerService.ensureConnection();
+    
+    // Give a moment for connection to establish
+    setTimeout(() => {
+      if (!multiplayerService.isConnected()) {
+        setErrorMessage('Unable to connect to server. Please check your connection.');
+        setConnectionStatus('error');
+        return;
+      }
+      
+      setConnectionStatus('waiting');
+      multiplayerService.createGame();
+      // The code will be set via the sessionCreated event handler
+    }, 500);
   };
 
   const handleJoinGame = () => {
-    if (joinCode.length === 3) {
-      const success = multiplayerService.joinGame(joinCode);
-      if (!success) {
-        setErrorMessage('Failed to join game');
-        setConnectionStatus('error');
-      }
-    } else {
+    if (joinCode.length !== 3) {
       setErrorMessage('Please enter a 3-digit code');
       setConnectionStatus('error');
+      return;
     }
+
+    // Ensure connection before joining
+    multiplayerService.ensureConnection();
+    
+    setTimeout(() => {
+      if (!multiplayerService.isConnected()) {
+        setErrorMessage('Unable to connect to server. Please check your connection.');
+        setConnectionStatus('error');
+        return;
+      }
+
+      setConnectionStatus('waiting');
+      multiplayerService.joinGame(joinCode);
+      // Result will be handled via event listeners
+    }, 500);
   };
 
   const handleLeaveSession = () => {
@@ -176,6 +220,36 @@ export function MultiplayerControls({ onMultiplayerStateChange }: MultiplayerCon
             className="bg-red-400 hover:bg-red-500 text-white px-6 py-2 rounded-2xl"
           >
             Cancel
+          </Button>
+        </div>
+      </motion.div>
+    );
+  }
+
+  if (connectionStatus === 'disconnected') {
+    return (
+      <motion.div 
+        className="bg-gradient-to-br from-red-100 to-pink-100 p-6 rounded-3xl border-3 border-white shadow-xl mb-6"
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.3 }}
+      >
+        <div className="text-center">
+          <div className="text-2xl mb-2">🔌❌</div>
+          <div className="text-lg font-bold text-red-700 mb-2">
+            Connection Lost
+          </div>
+          <div className="text-sm text-red-600 mb-4">
+            Disconnected from multiplayer server
+          </div>
+          <Button
+            onClick={() => {
+              setConnectionStatus('idle');
+              setErrorMessage('');
+            }}
+            className="bg-blue-400 hover:bg-blue-500 text-white px-6 py-2 rounded-2xl"
+          >
+            Try Again
           </Button>
         </div>
       </motion.div>

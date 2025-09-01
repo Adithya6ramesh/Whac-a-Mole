@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { Mole } from './Mole';
+import { multiplayerService } from '../services/MultiplayerService';
 
 interface GameGridProps {
   gameActive: boolean;
   onScore: (points: number) => void;
+  isMultiplayer?: boolean;
 }
 
 interface MoleState {
@@ -51,7 +53,7 @@ class PatternGenerator {
   }
 }
 
-export function GameGrid({ gameActive, onScore }: GameGridProps) {
+export function GameGrid({ gameActive, onScore, isMultiplayer = false }: GameGridProps) {
   const [moles, setMoles] = useState<MoleState[]>(
     Array(9).fill(null).map(() => ({ isVisible: false, isHit: false }))
   );
@@ -78,6 +80,11 @@ export function GameGrid({ gameActive, onScore }: GameGridProps) {
         spawnIntervalRef.current = null;
       }
       patternIndexRef.current = 0;
+      return;
+    }
+
+    // Skip local mole spawning in multiplayer mode (server controls moles)
+    if (isMultiplayer) {
       return;
     }
 
@@ -148,7 +155,79 @@ export function GameGrid({ gameActive, onScore }: GameGridProps) {
         if (mole.timeoutId) clearTimeout(mole.timeoutId);
       });
     };
-  }, [gameActive]);
+  }, [gameActive, isMultiplayer]);
+
+  // Handle server-controlled moles in multiplayer mode
+  useEffect(() => {
+    if (!isMultiplayer) return;
+
+    const handleMolesUpdated = (data: { currentMoles: boolean[]; timestamp: number }) => {
+      console.log('GameGrid received moles update:', data.currentMoles);
+      setMoles(prev => 
+        prev.map((mole, index) => ({
+          ...mole,
+          isVisible: data.currentMoles[index] || false,
+          isHit: false // Reset hit state when moles update
+        }))
+      );
+    };
+
+    const handleMoleSpawned = (data: { moleIndex: number; isVisible: boolean; timestamp: number }) => {
+      setMoles(prev => {
+        const newMoles = [...prev];
+        newMoles[data.moleIndex] = {
+          ...newMoles[data.moleIndex],
+          isVisible: data.isVisible,
+          isHit: false
+        };
+        return newMoles;
+      });
+    };
+
+    multiplayerService.on('molesUpdated', handleMolesUpdated);
+    multiplayerService.on('moleSpawned', handleMoleSpawned);
+
+    return () => {
+      multiplayerService.off('molesUpdated', handleMolesUpdated);
+      multiplayerService.off('moleSpawned', handleMoleSpawned);
+    };
+  }, [isMultiplayer]);
+
+  // Handle multiplayer mole hit synchronization
+  useEffect(() => {
+    if (!isMultiplayer) return;
+
+    const handleMoleHitSync = (data: { moleIndex: number; playerId: string; score: number }) => {
+      // Sync mole hit from other player
+      setMoles(prev => {
+        const newMoles = [...prev];
+        if (newMoles[data.moleIndex].isVisible && !newMoles[data.moleIndex].isHit) {
+          newMoles[data.moleIndex] = { ...newMoles[data.moleIndex], isHit: true };
+          
+          // Clear the mole after hit animation
+          setTimeout(() => {
+            setMoles(current => {
+              const updated = [...current];
+              updated[data.moleIndex] = { isVisible: false, isHit: false };
+              return updated;
+            });
+          }, 300);
+          
+          // Clear timeout if exists
+          if (newMoles[data.moleIndex].timeoutId) {
+            clearTimeout(newMoles[data.moleIndex].timeoutId);
+          }
+        }
+        return newMoles;
+      });
+    };
+
+    multiplayerService.on('moleHitSync', handleMoleHitSync);
+
+    return () => {
+      multiplayerService.off('moleHitSync', handleMoleHitSync);
+    };
+  }, [isMultiplayer]);
 
   const handleMoleClick = (index: number) => {
     if (!gameActive) return;
@@ -167,6 +246,11 @@ export function GameGrid({ gameActive, onScore }: GameGridProps) {
         const totalScore = baseScore + difficultyBonus;
         
         onScore(totalScore);
+        
+        // Send mole hit to multiplayer service if in multiplayer mode
+        if (isMultiplayer) {
+          multiplayerService.handleMoleHit(index, totalScore);
+        }
         
         // Clear the mole after hit animation
         setTimeout(() => {

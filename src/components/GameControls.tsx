@@ -7,6 +7,8 @@ interface GameControlsProps {
   onStartGame: () => void;
   onStopGame: () => void;
   onModeChange: (mode: '1P' | '2P') => void;
+  isMultiplayer?: boolean;
+  multiplayerRole?: 'host' | 'guest' | null;
 }
 
 export function GameControls({ 
@@ -14,7 +16,9 @@ export function GameControls({
   gameMode, 
   onStartGame, 
   onStopGame, 
-  onModeChange 
+  onModeChange,
+  isMultiplayer = false,
+  multiplayerRole = null
 }: GameControlsProps) {
   return (
     <div className="flex flex-col items-center space-y-6">
@@ -60,11 +64,14 @@ export function GameControls({
         className={`px-12 py-6 rounded-3xl border-4 border-white shadow-2xl text-2xl relative overflow-hidden ${
           gameActive
             ? 'bg-gradient-to-br from-red-400 via-red-500 to-red-600 text-white shadow-red-400/50'
-            : 'bg-gradient-to-br from-emerald-400 via-emerald-500 to-emerald-600 text-white shadow-emerald-400/50'
+            : (isMultiplayer && multiplayerRole === 'guest')
+              ? 'bg-gradient-to-br from-gray-300 via-gray-400 to-gray-500 text-gray-600 cursor-not-allowed'
+              : 'bg-gradient-to-br from-emerald-400 via-emerald-500 to-emerald-600 text-white shadow-emerald-400/50'
         }`}
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        onClick={gameActive ? onStopGame : onStartGame}
+        whileHover={!(isMultiplayer && multiplayerRole === 'guest') ? { scale: 1.05 } : {}}
+        whileTap={!(isMultiplayer && multiplayerRole === 'guest') ? { scale: 0.95 } : {}}
+        onClick={!(isMultiplayer && multiplayerRole === 'guest') ? (gameActive ? onStopGame : onStartGame) : undefined}
+        disabled={isMultiplayer && multiplayerRole === 'guest'}
         animate={gameActive ? {} : { 
           boxShadow: [
             '0 0 20px rgba(16, 185, 129, 0.5)',
@@ -87,7 +94,12 @@ export function GameControls({
             {gameActive ? '⏹️' : '▶️'}
           </span>
           <span>
-            {gameActive ? 'STOP GAME' : 'START GAME'}
+            {gameActive 
+              ? 'STOP GAME' 
+              : (isMultiplayer && multiplayerRole === 'guest')
+                ? 'WAITING FOR HOST'
+                : 'START GAME'
+            }
           </span>
         </div>
 
