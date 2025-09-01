@@ -54,24 +54,37 @@ export default function App() {
 
   // Start game
   const handleStartGame = useCallback(() => {
-    setGameActive(true);
-    setPlayer1Score(0);
-    setPlayer2Score(0);
-    setCurrentPlayer(1);
-  }, []);
+    if (isMultiplayer && multiplayerRole === 'host') {
+      // Host starts the multiplayer game
+      multiplayerService.startGame();
+    } else if (!isMultiplayer) {
+      // Local game start
+      setGameActive(true);
+      setPlayer1Score(0);
+      setPlayer2Score(0);
+      setCurrentPlayer(1);
+    }
+    // For multiplayer guests, they can't start the game
+  }, [isMultiplayer, multiplayerRole]);
 
   // Stop game
   const handleStopGame = useCallback(() => {
-    setGameActive(false);
-    
-    // Save high score in 1P mode
-    if (gameMode === '1P') {
-      const currentHighScore = parseInt(localStorage.getItem('whac-a-mole-highscore') || '0');
-      if (player1Score > currentHighScore) {
-        localStorage.setItem('whac-a-mole-highscore', player1Score.toString());
+    if (isMultiplayer) {
+      // End multiplayer game
+      multiplayerService.endGame();
+    } else {
+      // Local game end
+      setGameActive(false);
+      
+      // Save high score in 1P mode
+      if (gameMode === '1P') {
+        const currentHighScore = parseInt(localStorage.getItem('whac-a-mole-highscore') || '0');
+        if (player1Score > currentHighScore) {
+          localStorage.setItem('whac-a-mole-highscore', player1Score.toString());
+        }
       }
     }
-  }, [gameMode, player1Score]);
+  }, [gameMode, player1Score, isMultiplayer]);
 
   // Handle time up
   const handleTimeUp = useCallback(() => {
@@ -117,12 +130,60 @@ export default function App() {
       setGameActive(gameState.gameActive);
     };
 
+    const handleGameStarted = (gameState: any) => {
+      setGameActive(true);
+      setPlayer1Score(gameState.player1Score);
+      setPlayer2Score(gameState.player2Score);
+    };
+
+    const handleGameEnded = (gameState: any) => {
+      setGameActive(false);
+      setPlayer1Score(gameState.player1Score);
+      setPlayer2Score(gameState.player2Score);
+    };
+
+    const handleHostDisconnected = () => {
+      setIsMultiplayer(false);
+      setMultiplayerRole(null);
+      setGameActive(false);
+      // Show a notification that host disconnected
+      console.log('Host disconnected from the game');
+    };
+
+    const handleConnectionError = (error: string) => {
+      console.error('Multiplayer connection error:', error);
+      // Could show a toast notification here
+    };
+
     multiplayerService.on('gameStateUpdate', handleGameStateUpdate);
+    multiplayerService.on('gameStarted', handleGameStarted);
+    multiplayerService.on('gameEnded', handleGameEnded);
+    multiplayerService.on('hostDisconnected', handleHostDisconnected);
+    multiplayerService.on('connectionError', handleConnectionError);
 
     return () => {
       multiplayerService.off('gameStateUpdate', handleGameStateUpdate);
+      multiplayerService.off('gameStarted', handleGameStarted);
+      multiplayerService.off('gameEnded', handleGameEnded);
+      multiplayerService.off('hostDisconnected', handleHostDisconnected);
+      multiplayerService.off('connectionError', handleConnectionError);
     };
   }, [isMultiplayer]);
+
+  // Cleanup on component unmount
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      multiplayerService.disconnect();
+    };
+
+    // Add cleanup on page unload
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      // Don't disconnect here as it may interfere with other components
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-200 via-pink-100 to-blue-200 relative overflow-hidden">
@@ -192,6 +253,7 @@ export default function App() {
             <GameGrid 
               gameActive={gameActive}
               onScore={handleScore}
+              isMultiplayer={isMultiplayer}
             />
             
             {/* Current player indicator for 2P mode */}
@@ -224,6 +286,8 @@ export default function App() {
             onStartGame={handleStartGame}
             onStopGame={handleStopGame}
             onModeChange={handleModeChange}
+            isMultiplayer={isMultiplayer}
+            multiplayerRole={multiplayerRole}
           />
 
           {/* Game over celebration */}
