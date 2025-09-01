@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Socket.IO Connection Test</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>Socket.IO Connection Test</h1>
+    <div id="status">Connecting...</div>
+    <div id="log"></div>
+
+    <script>
+        const log = document.getElementById('log');
+        const status = document.getElementById('status');
+        
+        function addLog(message) {
+            const div = document.createElement('div');
+            div.textContent = new Date().toLocaleTimeString() + ': ' + message;
+            log.appendChild(div);
+            console.log(message);
+        }
+
+        // Test connection with minimal configuration
+        const socket = io('http://localhost:3001', {
+            transports: ['polling'],
+            timeout: 10000,
+            forceNew: true
+        });
+
+        socket.on('connect', () => {
+            status.textContent = 'Connected ✅';
+            addLog('Connected successfully! ID: ' + socket.id);
+        });
+
+        socket.on('connect_error', (error) => {
+            status.textContent = 'Connection Error ❌';
+            addLog('Connection error: ' + error.message);
+        });
+
+        socket.on('disconnect', (reason) => {
+            status.textContent = 'Disconnected';
+            addLog('Disconnected: ' + reason);
+        });
+
+        // Test basic echo
+        setTimeout(() => {
+            if (socket.connected) {
+                addLog('Testing basic functionality...');
+                socket.emit('create-game', (response) => {
+                    addLog('Create game response: ' + JSON.stringify(response));
+                });
+            }
+        }, 1000);
+    </script>
+</body>
+</html>

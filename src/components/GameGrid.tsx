@@ -85,6 +85,8 @@ export function GameGrid({ gameActive, onScore, isMultiplayer = false }: GameGri
 
     // Skip local mole spawning in multiplayer mode (server controls moles)
     if (isMultiplayer) {
+      // Initialize game start time for scoring in multiplayer
+      gameStartTimeRef.current = Date.now();
       return;
     }
 
@@ -239,10 +241,11 @@ export function GameGrid({ gameActive, onScore, isMultiplayer = false }: GameGri
         
         // Calculate bonus score based on current difficulty level - higher rewards for higher difficulty
         const currentTime = Date.now();
-        const elapsedSeconds = (currentTime - gameStartTimeRef.current) / 1000;
+        const gameStartTime = gameStartTimeRef.current || currentTime; // Fallback to current time if not set
+        const elapsedSeconds = Math.max(0, (currentTime - gameStartTime) / 1000);
         const difficultyLevel = Math.floor(elapsedSeconds / 15); // Match new 15-second intervals
         const baseScore = 10;
-        const difficultyBonus = difficultyLevel * 5; // +5 points per difficulty level (increased from 2)
+        const difficultyBonus = Math.min(difficultyLevel * 5, 50); // Cap bonus at 50 points
         const totalScore = baseScore + difficultyBonus;
         
         onScore(totalScore);
@@ -274,7 +277,8 @@ export function GameGrid({ gameActive, onScore, isMultiplayer = false }: GameGri
   const getCurrentDifficultyLevel = () => {
     if (!gameActive) return 0;
     const currentTime = Date.now();
-    const elapsedSeconds = (currentTime - gameStartTimeRef.current) / 1000;
+    const gameStartTime = gameStartTimeRef.current || currentTime;
+    const elapsedSeconds = Math.max(0, (currentTime - gameStartTime) / 1000);
     return Math.floor(elapsedSeconds / 15) + 1; // Match new 15-second intervals
   };
 

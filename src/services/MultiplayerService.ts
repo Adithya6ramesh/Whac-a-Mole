@@ -55,23 +55,17 @@ class MultiplayerService {
 
     try {
       // Connect to the Socket.IO server
-      // In development, connect to localhost:3001
-      // In production, this would be your deployed server URL
-      const serverUrl = process.env.NODE_ENV === 'production' 
-        ? 'https://your-deployed-server.com' 
-        : 'http://localhost:3001';
+      // Always use localhost for development (force localhost even if NODE_ENV is production)
+      const serverUrl = 'http://localhost:3001';
 
       console.log('Initializing Socket.IO connection to:', serverUrl);
 
       this.socket = io(serverUrl, {
-        transports: ['polling', 'websocket'], // Try polling first for better compatibility
+        transports: ['polling', 'websocket'],
         timeout: 10000,
-        reconnection: true,
-        reconnectionAttempts: this.maxReconnectAttempts,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
+        reconnection: false, // Disable auto-reconnection to prevent issues
         forceNew: true,
-        autoConnect: false, // Manual connection control
+        autoConnect: true
       });
 
       this.setupSocketListeners();

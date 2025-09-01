@@ -6,13 +6,35 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
-// Configure CORS for Socket.IO
+// Add error handling for the HTTP server
+server.on('error', (error) => {
+  console.error('HTTP Server error:', error);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Configure CORS for Socket.IO with minimal, working settings
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    origin: ["http://localhost:3000", "http://localhost:5173"],
     methods: ["GET", "POST"],
-    credentials: true
-  }
+    credentials: false  // Simplified
+  },
+  // Use default timeouts for stability
+  allowEIO3: true,
+  transports: ['polling', 'websocket']
+});
+
+// Simplified error handling
+io.engine.on('connection_error', (err) => {
+  console.error('Connection error:', err.code, err.message);
 });
 
 app.use(cors());
