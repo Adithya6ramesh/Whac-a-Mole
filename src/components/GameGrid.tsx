@@ -248,7 +248,10 @@ export function GameGrid({ gameActive, onScore, isMultiplayer = false }: GameGri
         const difficultyBonus = Math.min(difficultyLevel * 5, 50); // Cap bonus at 50 points
         const totalScore = baseScore + difficultyBonus;
         
-        onScore(totalScore);
+        // Schedule score update to happen after render
+        setTimeout(() => {
+          onScore(totalScore);
+        }, 0);
         
         // Send mole hit to multiplayer service if in multiplayer mode
         if (isMultiplayer) {
