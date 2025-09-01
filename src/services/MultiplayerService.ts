@@ -1,5 +1,5 @@
-// Simple multiplayer service using localStorage for demo
-// In production, this would use WebSocket/Socket.io with a backend
+import { io, Socket } from 'socket.io-client';
+import { moleHitRateLimiter, gameStateRateLimiter } from '../utils/rateLimiter';
 
 export interface GameSession {
   code: string;
@@ -24,137 +24,351 @@ export interface MultiplayerEvent {
 }
 
 class MultiplayerService {
-  private playerId: string;
+  private socket: Socket | null = null;
   private currentSession: GameSession | null = null;
   private eventListeners: { [key: string]: Function[] } = {};
-  private syncInterval: NodeJS.Timeout | null = null;
+  private playerId: string;
+  private playerRole: 'host' | 'guest' | null = null;
+  private connectionStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected';
+  private initialized: boolean = false;
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 3;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
   constructor() {
     this.playerId = this.generatePlayerId();
-    this.startSync();
+    // Don't auto-initialize in constructor to prevent issues during development
   }
 
   private generatePlayerId(): string {
     return 'player_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
   }
 
-  private generateGameCode(): string {
-    // Generate random 3-digit code
-    return Math.floor(100 + Math.random() * 900).toString();
-  }
+  // Lazy initialization to prevent connection issues during development
+  private initializeSocket() {
+    if (this.initialized || this.socket?.connected) {
+      return;
+    }
 
-  private startSync() {
-    // Sync every 100ms for real-time feel
-    this.syncInterval = setInterval(() => {
-      if (this.currentSession) {
-        this.syncGameState();
-      }
-    }, 100);
-  }
+    this.initialized = true;
+    this.connectionStatus = 'connecting';
 
-  private syncGameState() {
-    if (!this.currentSession) return;
+    try {
+      // Connect to the Socket.IO server
+      // In development, connect to localhost:3001
+      // In production, this would be your deployed server URL
+      const serverUrl = process.env.NODE_ENV === 'production' 
+        ? 'https://your-deployed-server.com' 
+        : 'http://localhost:3001';
 
-    const sessions = this.getAllSessions();
-    const updatedSession = sessions[this.currentSession.code];
-    
-    if (updatedSession && updatedSession.lastUpdate > this.currentSession.lastUpdate) {
-      this.currentSession = updatedSession;
-      this.emit('gameStateUpdate', updatedSession.gameState);
+      console.log('Initializing Socket.IO connection to:', serverUrl);
+
+      this.socket = io(serverUrl, {
+        transports: ['polling', 'websocket'], // Try polling first for better compatibility
+        timeout: 10000,
+        reconnection: true,
+        reconnectionAttempts: this.maxReconnectAttempts,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        forceNew: true,
+        autoConnect: false, // Manual connection control
+      });
+
+      this.setupSocketListeners();
+      
+      // Connect after a small delay to ensure setup is complete
+      setTimeout(() => {
+        if (this.socket && !this.socket.connected) {
+          this.socket.connect();
+        }
+      }, 100);
+
+    } catch (error) {
+      console.error('Failed to initialize socket:', error);
+      this.connectionStatus = 'disconnected';
+      this.initialized = false;
     }
   }
 
-  private getAllSessions(): { [code: string]: GameSession } {
-    const sessions = localStorage.getItem('whac_multiplayer_sessions');
-    return sessions ? JSON.parse(sessions) : {};
+  // Public method to ensure connection
+  public ensureConnection() {
+    if (!this.initialized && this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.initializeSocket();
+    }
   }
 
-  private saveSessions(sessions: { [code: string]: GameSession }) {
-    localStorage.setItem('whac_multiplayer_sessions', JSON.stringify(sessions));
+  private setupSocketListeners() {
+    if (!this.socket) return;
+
+    // Clear any existing listeners to prevent duplicates
+    this.socket.removeAllListeners();
+
+    this.socket.on('connect', () => {
+      console.log('Connected to multiplayer server:', this.socket?.id);
+      this.connectionStatus = 'connected';
+      this.reconnectAttempts = 0; // Reset on successful connection
+      this.emit('connected', { playerId: this.socket?.id });
+    });
+
+    this.socket.on('disconnect', (reason) => {
+      console.log('Disconnected from multiplayer server, reason:', reason);
+      this.connectionStatus = 'disconnected';
+      this.emit('disconnected');
+      
+      // Don't auto-reconnect on manual disconnect
+      if (reason === 'io client disconnect') {
+        this.initialized = false;
+      }
+    });
+
+    this.socket.on('connect_error', (error) => {
+      console.error('Connection error:', error);
+      this.connectionStatus = 'disconnected';
+      this.reconnectAttempts++;
+      
+      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        console.error('Max reconnection attempts reached');
+        this.initialized = false;
+      }
+      
+      this.emit('connectionError', error.message);
+    });
+
+    // Game session events
+    this.socket.on('player-connected', (data) => {
+      console.log('Player connected:', data);
+      this.emit('playerConnected', data);
+    });
+
+    this.socket.on('player-disconnected', (data) => {
+      console.log('Player disconnected:', data);
+      this.emit('playerDisconnected', data);
+    });
+
+    this.socket.on('host-disconnected', () => {
+      console.log('Host disconnected');
+      this.currentSession = null;
+      this.playerRole = null;
+      this.emit('hostDisconnected');
+      this.emit('sessionLeft');
+    });
+
+    // Game state events
+    this.socket.on('game-state-updated', (gameState) => {
+      if (this.currentSession) {
+        this.currentSession.gameState = gameState;
+        this.currentSession.lastUpdate = Date.now();
+      }
+      this.emit('gameStateUpdate', gameState);
+    });
+
+    this.socket.on('game-started', (gameState) => {
+      if (this.currentSession) {
+        this.currentSession.gameState = gameState;
+      }
+      this.emit('gameStarted', gameState);
+    });
+
+    this.socket.on('game-ended', (gameState) => {
+      if (this.currentSession) {
+        this.currentSession.gameState = gameState;
+      }
+      this.emit('gameEnded', gameState);
+    });
+
+    this.socket.on('mole-hit-sync', (data) => {
+      this.emit('moleHitSync', data);
+    });
+
+    this.socket.on('moles-updated', (data) => {
+      console.log('MultiplayerService received moles-updated:', data);
+      this.emit('molesUpdated', data);
+    });
+
+    this.socket.on('mole-spawned', (data) => {
+      console.log('MultiplayerService received mole-spawned:', data);
+      this.emit('moleSpawned', data);
+    });
+
+    this.socket.on('error', (error) => {
+      console.error('Socket error:', error);
+      this.emit('error', error.message);
+    });
   }
 
-  private updateSession(updates: Partial<GameSession>) {
-    if (!this.currentSession) return;
-
-    const sessions = this.getAllSessions();
-    this.currentSession = {
-      ...this.currentSession,
-      ...updates,
-      lastUpdate: Date.now()
-    };
-    sessions[this.currentSession.code] = this.currentSession;
-    this.saveSessions(sessions);
+  // Event system with memory leak prevention
+  on(event: string, callback: Function) {
+    if (!this.eventListeners[event]) {
+      this.eventListeners[event] = [];
+    }
+    
+    // Prevent duplicate listeners
+    if (!this.eventListeners[event].includes(callback)) {
+      this.eventListeners[event].push(callback);
+    }
   }
 
-  // Create a new game session and return invite code
+  off(event: string, callback: Function) {
+    if (this.eventListeners[event]) {
+      this.eventListeners[event] = this.eventListeners[event].filter(cb => cb !== callback);
+      
+      // Clean up empty arrays to prevent memory leaks
+      if (this.eventListeners[event].length === 0) {
+        delete this.eventListeners[event];
+      }
+    }
+  }
+
+  private emit(event: string, data?: any) {
+    if (this.eventListeners[event]) {
+      // Create a copy to prevent issues if listeners modify the array during iteration
+      const listeners = [...this.eventListeners[event]];
+      listeners.forEach(callback => {
+        try {
+          callback(data);
+        } catch (error) {
+          console.error('Error in event listener:', error);
+        }
+      });
+    }
+  }
+
+  // Check if connected to server
+  isConnected(): boolean {
+    return this.socket?.connected || false;
+  }
+
+  getConnectionStatus(): 'disconnected' | 'connecting' | 'connected' {
+    return this.connectionStatus;
+  }
+
+  // Create a new game session
   createGame(): string {
-    const code = this.generateGameCode();
-    const session: GameSession = {
-      code,
-      hostId: this.playerId,
-      gameState: {
-        gameActive: false,
-        player1Score: 0,
-        player2Score: 0,
-        currentMoles: new Array(9).fill(false),
-        timeLeft: 180
-      },
-      lastUpdate: Date.now()
-    };
+    this.ensureConnection();
+    
+    if (!this.socket || !this.socket.connected) {
+      this.emit('joinError', 'Not connected to server');
+      return '';
+    }
 
-    const sessions = this.getAllSessions();
-    sessions[code] = session;
-    this.saveSessions(sessions);
-    this.currentSession = session;
-
-    this.emit('sessionCreated', { code, role: 'host' });
-    return code;
+    return new Promise<string>((resolve) => {
+      this.socket?.emit('create-game', (response: { success: boolean; code?: string; role?: string; error?: string }) => {
+        if (response.success && response.code) {
+          this.currentSession = {
+            code: response.code,
+            hostId: this.socket?.id || '',
+            gameState: {
+              gameActive: false,
+              player1Score: 0,
+              player2Score: 0,
+              currentMoles: Array(16).fill(false),
+              timeLeft: 180
+            },
+            lastUpdate: Date.now()
+          };
+          this.playerRole = 'host';
+          this.emit('sessionCreated', { code: response.code, role: 'host' });
+          resolve(response.code);
+        } else {
+          this.emit('joinError', response.error || 'Failed to create game');
+          resolve('');
+        }
+      });
+    }) as any; // Type assertion to handle the async nature
   }
 
   // Join an existing game session with code
   joinGame(code: string): boolean {
-    const sessions = this.getAllSessions();
-    const session = sessions[code];
-
-    if (!session) {
-      this.emit('joinError', 'Invalid code');
+    this.ensureConnection();
+    
+    if (!this.socket || !this.socket.connected) {
+      this.emit('joinError', 'Not connected to server');
       return false;
     }
 
-    if (session.guestId && session.guestId !== this.playerId) {
-      this.emit('joinError', 'Game is full');
-      return false;
-    }
+    this.socket.emit('join-game', { code }, (response: { success: boolean; code?: string; role?: string; gameState?: any; error?: string }) => {
+      if (response.success && response.code) {
+        this.currentSession = {
+          code: response.code,
+          hostId: '', // Will be set by server
+          guestId: this.socket?.id,
+          gameState: response.gameState || {
+            gameActive: false,
+            player1Score: 0,
+            player2Score: 0,
+            currentMoles: Array(16).fill(false),
+            timeLeft: 180
+          },
+          lastUpdate: Date.now()
+        };
+        this.playerRole = 'guest';
+        this.emit('sessionJoined', { code: response.code, role: 'guest' });
+        return true;
+      } else {
+        this.emit('joinError', response.error || 'Failed to join game');
+        return false;
+      }
+    });
 
-    // Join the session
-    session.guestId = this.playerId;
-    session.lastUpdate = Date.now();
-    sessions[code] = session;
-    this.saveSessions(sessions);
-    this.currentSession = session;
-
-    this.emit('sessionJoined', { code, role: 'guest' });
-    this.emit('playerConnected', { playerId: this.playerId });
-    return true;
+    return true; // Optimistic return, actual result comes via callback
   }
 
   // Update game state (scores, mole hits, etc.)
   updateGameState(updates: Partial<GameSession['gameState']>) {
-    if (!this.currentSession) return;
+    if (!this.currentSession || !this.socket?.connected) return;
 
-    this.updateSession({
-      gameState: {
-        ...this.currentSession.gameState,
-        ...updates
-      }
+    // Rate limit game state updates to prevent spam
+    if (!gameStateRateLimiter.canExecute()) {
+      console.warn('Game state update rate limited');
+      return;
+    }
+
+    this.socket.emit('update-game-state', {
+      code: this.currentSession.code,
+      updates
     });
+  }
 
-    this.emit('gameStateUpdate', this.currentSession.gameState);
+  // Start the game (host only)
+  startGame() {
+    if (!this.currentSession || !this.socket?.connected || this.playerRole !== 'host') {
+      return;
+    }
+
+    this.socket.emit('start-game', {
+      code: this.currentSession.code
+    });
+  }
+
+  // End the game
+  endGame() {
+    if (!this.currentSession || !this.socket?.connected) return;
+
+    this.socket.emit('end-game', {
+      code: this.currentSession.code
+    });
+  }
+
+  // Handle mole hit with rate limiting
+  handleMoleHit(moleIndex: number, score: number) {
+    if (!this.currentSession || !this.socket?.connected) return;
+
+    // Rate limit mole hits to prevent spam and browser crashes
+    if (!moleHitRateLimiter.canExecute()) {
+      console.warn('Mole hit rate limited');
+      return;
+    }
+
+    this.socket.emit('mole-hit', {
+      code: this.currentSession.code,
+      moleIndex,
+      score
+    });
   }
 
   // Send multiplayer event
   sendEvent(event: Omit<MultiplayerEvent, 'playerId' | 'timestamp'>) {
-    if (!this.currentSession) return;
+    if (!this.currentSession || !this.socket?.connected) return;
 
     const fullEvent: MultiplayerEvent = {
       ...event,
@@ -162,16 +376,33 @@ class MultiplayerService {
       timestamp: Date.now()
     };
 
-    // Store event in session for other player to pick up
-    const sessions = this.getAllSessions();
-    const session = sessions[this.currentSession.code];
-    if (session) {
-      session.lastUpdate = Date.now();
-      sessions[this.currentSession.code] = session;
-      this.saveSessions(sessions);
+    // Handle different event types
+    switch (event.type) {
+      case 'mole_hit':
+        this.handleMoleHit(event.data.moleIndex, event.data.score);
+        break;
+      case 'game_start':
+        this.startGame();
+        break;
+      case 'game_end':
+        this.endGame();
+        break;
+      default:
+        console.warn('Unknown event type:', event.type);
+    }
+  }
+
+  // Leave current session
+  leaveSession() {
+    if (this.currentSession && this.socket?.connected) {
+      this.socket.emit('leave-game', {
+        code: this.currentSession.code
+      });
     }
 
-    this.emit('multiplayerEvent', fullEvent);
+    this.currentSession = null;
+    this.playerRole = null;
+    this.emit('sessionLeft');
   }
 
   // Get current session info
@@ -179,54 +410,50 @@ class MultiplayerService {
     return this.currentSession;
   }
 
-  // Check if player is host
-  isHost(): boolean {
-    return this.currentSession?.hostId === this.playerId;
+  // Get player role
+  getPlayerRole(): 'host' | 'guest' | null {
+    return this.playerRole;
   }
 
-  // Check if game has both players
-  isGameReady(): boolean {
-    return this.currentSession?.guestId != null;
+  // Get player ID
+  getPlayerId(): string {
+    return this.socket?.id || this.playerId;
   }
 
-  // Leave current session
-  leaveSession() {
+  // Cleanup with proper memory management
+  disconnect() {
+    console.log('Disconnecting multiplayer service...');
+    
+    // Clear reconnection timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    
+    // Leave current session first
     if (this.currentSession) {
-      const sessions = this.getAllSessions();
-      delete sessions[this.currentSession.code];
-      this.saveSessions(sessions);
+      this.leaveSession();
     }
+    
+    // Disconnect socket and clean up listeners
+    if (this.socket) {
+      this.socket.removeAllListeners();
+      this.socket.disconnect();
+      this.socket = null;
+    }
+    
+    // Clear all event listeners
+    this.eventListeners = {};
+    this.connectionStatus = 'disconnected';
+    this.initialized = false;
+    this.reconnectAttempts = 0;
     this.currentSession = null;
-    this.emit('sessionLeft');
-  }
-
-  // Event system
-  on(event: string, callback: Function) {
-    if (!this.eventListeners[event]) {
-      this.eventListeners[event] = [];
-    }
-    this.eventListeners[event].push(callback);
-  }
-
-  off(event: string, callback: Function) {
-    if (this.eventListeners[event]) {
-      this.eventListeners[event] = this.eventListeners[event].filter(cb => cb !== callback);
-    }
-  }
-
-  private emit(event: string, data?: any) {
-    if (this.eventListeners[event]) {
-      this.eventListeners[event].forEach(callback => callback(data));
-    }
-  }
-
-  // Cleanup
-  destroy() {
-    if (this.syncInterval) {
-      clearInterval(this.syncInterval);
-    }
-    this.leaveSession();
+    this.playerRole = null;
   }
 }
 
+// Export singleton instance
 export const multiplayerService = new MultiplayerService();
+
+// Also export the class for testing
+export default MultiplayerService;
