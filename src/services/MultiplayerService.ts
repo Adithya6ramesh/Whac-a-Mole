@@ -55,8 +55,8 @@ class MultiplayerService {
 
     try {
       // Connect to the Socket.IO server
-      // Always use localhost for development (force localhost even if NODE_ENV is production)
-      const serverUrl = 'http://localhost:3001';
+      // Use environment variable for production, fallback to localhost for development
+      const serverUrl = (import.meta as any).env?.VITE_SOCKET_SERVER_URL || 'http://localhost:3001';
 
       console.log('Initializing Socket.IO connection to:', serverUrl);
 

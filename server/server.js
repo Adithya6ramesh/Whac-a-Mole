@@ -20,10 +20,17 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Configure CORS for Socket.IO with minimal, working settings
+// Configure CORS for Socket.IO with deployment-friendly settings
+const allowedOrigins = [
+  "http://localhost:3000", 
+  "http://localhost:5173",
+  // Add production URLs via environment variable
+  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [])
+];
+
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:3000", "http://localhost:5173"],
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: false  // Simplified
   },
